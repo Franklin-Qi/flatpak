@@ -238,6 +238,10 @@ flatpak_option_context_new_with_commands (FlatpakCommand *f_commands)
   return context;
 }
 
+/**
+ * 检测 Flatpak 所需的导出目录（exports/share）是否已经包含在当前会话的 XDG_DATA_DIRS 环境变量中，
+ * 并在缺失时给出友好的提示。这关系到 Flatpak 安装的应用能否被桌面环境（如 GNOME/KDE）正确发现和显示。
+ */
 static void
 check_environment (void)
 {
@@ -250,20 +254,25 @@ check_environment (void)
   int rows, cols;
 
   /* Only print warnings on ttys */
+  /* 只在终端（tty）下输出警告，如果不是在终端环境下（如脚本或服务），直接返回，不做检查。 */
   if (!flatpak_fancy_output ())
     return;
 
   /* Don't recommend restarting the session when we're not in one */
+  /* 没有 DBus 会话总线地址时不检查，如果没有 DBUS_SESSION_BUS_ADDRESS，说明当前不是桌面会话环境，直接返回。 */
   if (!g_getenv ("DBUS_SESSION_BUS_ADDRESS"))
     return;
 
   /* Avoid interfering with tests */
+  /* 如果设置了 FLATPAK_SYSTEM_DIR 或 FLATPAK_USER_DIR（通常用于测试），跳过检查，这样不会影响自动化测试。*/
   if (g_getenv ("FLATPAK_SYSTEM_DIR") || g_getenv ("FLATPAK_USER_DIR"))
     return;
 
-  system_exports = g_build_filename (FLATPAK_SYSTEMDIR, "exports/share", NULL);
-  user_exports = g_build_filename (g_get_user_data_dir (), "flatpak/exports/share", NULL);
+  /* 构造系统和用户的 Flatpak 导出目录路径 */
+  system_exports = g_build_filename (FLATPAK_SYSTEMDIR, "exports/share", NULL); // 系统导出目录 /var/lib/flatpak/exports/share/
+  user_exports = g_build_filename (g_get_user_data_dir (), "flatpak/exports/share", NULL); // 用户导出目录 $HOME/.local/share/flatpak/exports/share/
 
+  /* 遍历当前 XDG_DATA_DIRS 检查这两个导出目录是否已经包含在 XDG_DATA_DIRS 路径列表中。*/
   dirs = g_get_system_data_dirs ();
   for (i = 0; dirs[i]; i++)
     {
@@ -286,13 +295,17 @@ check_environment (void)
   flatpak_get_window_size (&rows, &cols);
   if (cols > 80)
     cols = 80;
-
+  
+  /* 根据检测结果输出提示。
+   * 如果两个目录都没包含，提示用户这两个目录缺失，Flatpak 应用可能不会出现在桌面菜单，建议重启会话。
+   * 如果只缺其中一个，也会分别提示。*/
   if (!has_system && !has_user)
     {
       g_autofree char *missing = NULL;
       missing = g_strdup_printf ("\n\n '%s'\n '%s'\n\n", system_exports, user_exports);
       g_print ("\n");
       /* Translators: this text is automatically wrapped, don't insert line breaks */
+      /* 输出内容自动换行，保证终端显示友好。 使用 print_wrapped 保证提示不会超出终端宽度。 */
       print_wrapped (cols,
                      _("Note that the directories %s are not in the search path "
                        "set by the XDG_DATA_DIRS environment variable, so applications "
